@@ -977,8 +977,8 @@ export function PhonePreview() {
         </div>
         
         <div className="text-center relative z-10">
-          <div className="w-20 h-20 flex items-center justify-center mx-auto mb-4">
-            <img src="/APEX_LOGO.png" alt="APEX DROID" className="w-16 h-16 object-contain" />
+          <div className="w-32 h-32 flex items-center justify-center mx-auto mb-6">
+            <img src="/APEX_LOGO.png" alt="APEX DROID" className="w-28 h-28 object-contain" />
           </div>
           <h2 className="text-xl font-semibold mb-2">Projeto carregado</h2>
           <p className="text-muted-foreground text-sm mb-4 max-w-xs">
