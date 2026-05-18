@@ -1,303 +1,422 @@
-// Gerador de XML BKY 100% compativel com Kodular/App Inventor
-// Etapa 3: Estrutura correta com is_generic="false" e IDs únicos
+/**
+ * Gerador de XML BKY 100% compatível com Kodular/App Inventor
+ * 
+ * Este arquivo usa o serviço centralizado bky-sync-service para serialização
+ * e mantém compatibilidade com a API anterior.
+ */
 
-function generateId(): string {
-  const chars = 'abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789!@#$%^&*'
-  let id = ''
-  for (let i = 0; i < 20; i++) {
-    id += chars[Math.floor(Math.random() * chars.length)]
+import {
+  type BkyBlock,
+  type BkyDocument,
+  type FlowNode,
+  type FlowEdge,
+  type FlowDocument,
+  serializeToBkyXml,
+  generateId
+} from './bky-sync-service'
+
+/**
+ * Converte FlowDocument para XML BKY
+ */
+export function convertFlowToBky(nodes: FlowNode[], edges: FlowEdge[]): string {
+  const doc: BkyDocument = {
+    xmlns: 'http://www.w3.org/1999/xhtml',
+    blocks: []
   }
-  return id
-}
 
-export function convertFlowToBky(nodes: any[], edges: any[]): string {
-  let xml = '<xml xmlns="http://www.w3.org/1999/xhtml">\n'
+  // Encontrar nós raiz (sem arestas de entrada ou eventos)
+  const hasIncoming = new Set(edges.map(e => e.target))
   
-  // Encontrar nós de topo: evento, lógica raíz, ou sem arestas de entrada
-  const topNodes = nodes.filter(n => {
-    const hasIncoming = edges.some(e => e.target === n.id)
-    const isEvent = (n.metadata?.functions || []).some((f: any) => f.type === 'event') ||
-                    n.label.startsWith('Quando') ||
-                    n.type === 'event'
-    const isLogicTop = n.type === 'logic' && !hasIncoming
-    return isEvent || isLogicTop
+  const rootNodes = nodes.filter(n => {
+    // Nós de evento são sempre raiz
+    if (n.type === 'event' || n.label.startsWith('Quando')) return true
+    // Nós de lógica (procedimentos, variáveis globais) são raiz
+    if (n.type === 'logic' && (n.label.startsWith('Procedimento') || n.label.startsWith('Variável Global') || n.label.startsWith('Função'))) return true
+    // Nós sem entrada são raiz
+    return !hasIncoming.has(n.id)
   })
+
+  // Se não há nós raiz claros, usar eventos ou o primeiro nó
+  const eventNodes = nodes.filter(n => 
+    n.type === 'event' || 
+    n.metadata?.functions?.some(f => f.type === 'event') ||
+    n.label.startsWith('Quando')
+  )
   
+  const topNodes = rootNodes.length > 0 ? rootNodes : (eventNodes.length > 0 ? eventNodes : nodes.slice(0, 1))
+
+  // Processar nós já visitados para evitar duplicatas
+  const processedNodes = new Set<string>()
+
   topNodes.forEach(node => {
-    const functions = node.metadata?.functions || []
-    const events = functions.filter((f: any) => f.type === 'event')
-    
-    // Bloco de procedimento
-    if (node.type === 'logic' && node.label.startsWith('Procedimento')) {
-      const procName = node.label.split(': ')[1] || 'procedimento'
-      xml += `  <block type="procedures_defnoreturn" id="${generateId()}" x="${Math.round(node.x)}" y="${Math.round(node.y)}">\n`
-      xml += `    <field name="NAME">${procName}</field>\n`
-      const nextEdge = edges.find(e => e.source === node.id)
-      if (nextEdge) {
-        xml += '    <statement name="STACK">\n'
-        xml += processNodeToBky(nextEdge.target, nodes, edges, 6)
-        xml += '    </statement>\n'
-      }
-      xml += '  </block>\n'
-      return
+    if (processedNodes.has(node.id)) return
+    const block = convertNodeToBlock(node, nodes, edges, processedNodes)
+    if (block) {
+      doc.blocks.push(block)
     }
-    
-    // Bloco de variável global
-    if (node.type === 'logic' && node.label.startsWith('Variável Global')) {
-      const varName = node.label.split(': ')[1] || 'var'
-      xml += `  <block type="global_declaration" id="${generateId()}" x="${Math.round(node.x)}" y="${Math.round(node.y)}">\n`
-      xml += `    <field name="NAME">${varName}</field>\n`
-      xml += `    <value name="VALUE"><block type="math_number"><field name="NUM">0</field></block></value>\n`
-      xml += '  </block>\n'
-      return
-    }
-
-    // Inferir evento do label se nao houver funcoes explicitas
-    if (events.length === 0 && (node.label.startsWith('Quando') || node.type === 'event')) {
-      const raw = node.label.replace('Quando ', '')
-      const parts = raw.split('.')
-      const compName = node.metadata?.componentName || parts[0] || 'Screen1'
-      const eventName = parts[1] || node.metadata?.eventName || 'Click'
-      const compType = node.metadata?.componentType || 'Form'
-      events.push({ name: eventName, componentName: compName, componentType: compType })
-    }
-
-    events.forEach((event: any) => {
-      const compName = node.metadata?.componentName || event.componentName || 'Screen1'
-      const eventName = event.name || 'Click'
-      const compType = event.componentType || node.metadata?.componentType || 'Form'
-
-      xml += `  <block type="component_event" id="${generateId()}" x="${Math.round(node.x)}" y="${Math.round(node.y)}">\n`
-      xml += `    <mutation component_type="${compType}" is_generic="false" instance_name="${compName}" event_name="${eventName}"></mutation>\n`
-      xml += `    <field name="COMPONENT_SELECTOR">${compName}</field>\n`
-      
-      const nextEdge = edges.find(e => e.source === node.id)
-      if (nextEdge) {
-        xml += '    <statement name="DO">\n'
-        xml += processNodeToBky(nextEdge.target, nodes, edges, 6)
-        xml += '    </statement>\n'
-      }
-      xml += '  </block>\n'
-    })
   })
-  
-  xml += '</xml>'
-  return xml
+
+  return serializeToBkyXml(doc)
 }
 
-function indent(level: number): string {
-  return ' '.repeat(level)
-}
+/**
+ * Converte um nó de fluxo para um bloco BKY
+ */
+function convertNodeToBlock(
+  node: FlowNode, 
+  allNodes: FlowNode[], 
+  edges: FlowEdge[],
+  processedNodes: Set<string>
+): BkyBlock | null {
+  if (processedNodes.has(node.id)) return null
+  processedNodes.add(node.id)
 
-function processNodeToBky(nodeId: string, nodes: any[], edges: any[], depth = 4): string {
-  const node = nodes.find(n => n.id === nodeId)
-  if (!node) return ''
-  
-  const pad = indent(depth)
-  const pad2 = indent(depth + 2)
-  let blockXml = ''
+  const block: BkyBlock = {
+    id: node.id,
+    type: node.metadata?.bkyType || 'text_print',
+    x: node.x,
+    y: node.y,
+    fields: {},
+    values: {},
+    statements: {}
+  }
+
   const functions = node.metadata?.functions || []
-  
-  // Prioridade 1: Tipo de bloco explícito (bkyType) vindo do Sidebar
-  if (node.metadata?.bkyType) {
-    blockXml += `${pad}<block type="${node.metadata.bkyType}" id="${generateId()}">\n`
-    
-    // Se for abrir outra tela, precisamos do input SCREEN
-    if (node.metadata.bkyType === 'controls_openAnotherScreen' || node.metadata.bkyType === 'kodular_open_screen') {
-      const screenName = node.metadata?.targetScreen || 'Screen1'
-      blockXml += `${pad2}<value name="SCREEN"><block type="text" id="${generateId()}"><field name="TEXT">${screenName}</field></block></value>\n`
-    }
+  const eventFunc = functions.find(f => f.type === 'event')
+  const methodFunc = functions.find(f => f.type === 'method')
+  const setPropFunc = functions.find(f => f.type === 'property_set')
+  const getPropFunc = functions.find(f => f.type === 'property_get')
 
-    // Se for uma variável, precisamos do campo VAR
-    if (node.metadata.bkyType === 'lexical_variable_set' || node.metadata.bkyType === 'lexical_variable_get') {
-      const varName = node.label.replace('Definir ', '').replace('Obter ', '') || 'item'
-      blockXml += `${pad2}<field name="VAR">global ${varName}</field>\n`
-    }
-    // Se for um bloco de texto literal
-    if (node.metadata.bkyType === 'text') {
-      blockXml += `${pad2}<field name="TEXT"></field>\n`
-    }
-    // Se for um número
-    if (node.metadata.bkyType === 'math_number') {
-      blockXml += `${pad2}<field name="NUM">0</field>\n`
-    }
-    
-    blockXml += processNextNode(node, edges, nodes, depth)
-    blockXml += `${pad}</block>\n`
-    return blockXml
-  }
-  
-  // Nó de navegação — usa controls_openAnotherScreen
-  if (node.label.startsWith('Abrir Tela')) {
-    const screenName = node.metadata?.targetScreen || node.label.split(': ')[1] || 'Screen1'
-    blockXml += `${pad}<block type="controls_openAnotherScreen" id="${generateId()}">\n`
-    blockXml += `${pad2}<value name="SCREEN"><block type="text" id="${generateId()}"><field name="TEXT">${screenName}</field></block></value>\n`
-    blockXml += processNextNode(node, edges, nodes, depth)
-    blockXml += `${pad}</block>\n`
-    return blockXml
-  }
-  
-  // Nó de decisão (If/Else)
-  if (node.type === 'decision') {
-    const trueEdge = edges.find(e => e.source === nodeId && (e.label === 'Sim' || e.label === 'Verdadeiro' || !e.label))
-    const falseEdge = edges.find(e => e.source === nodeId && (e.label === 'Não' || e.label === 'Falso'))
-
-    if (falseEdge) {
-      blockXml += `${pad}<block type="controls_if" id="${generateId()}">\n`
-      blockXml += `${pad2}<mutation else="1"></mutation>\n`
-    } else {
-      blockXml += `${pad}<block type="controls_if" id="${generateId()}">\n`
-    }
-    blockXml += `${pad2}<value name="IF0"><block type="logic_boolean" id="${generateId()}"><field name="BOOL">TRUE</field></block></value>\n`
-    if (trueEdge) {
-      blockXml += `${pad2}<statement name="DO0">\n`
-      blockXml += processNodeToBky(trueEdge.target, nodes, edges, depth + 4)
-      blockXml += `${pad2}</statement>\n`
-    }
-    if (falseEdge) {
-      blockXml += `${pad2}<statement name="ELSE">\n`
-      blockXml += processNodeToBky(falseEdge.target, nodes, edges, depth + 4)
-      blockXml += `${pad2}</statement>\n`
-    }
-    blockXml += processNextNode(node, edges, nodes, depth)
-    blockXml += `${pad}</block>\n`
-    return blockXml
-  }
-  
-  // Nó de definir variavel
-  if (node.type === 'logic' && node.label.startsWith('Definir')) {
-    const varName = node.label.split(' ')[1] || 'var'
-    blockXml += `${pad}<block type="lexical_variable_set" id="${generateId()}">\n`
-    blockXml += `${pad2}<field name="VAR">global ${varName}</field>\n`
-    blockXml += `${pad2}<value name="VALUE"><block type="math_number" id="${generateId()}"><field name="NUM">0</field></block></value>\n`
-    blockXml += processNextNode(node, edges, nodes, depth)
-    blockXml += `${pad}</block>\n`
-    return blockXml
-  }
-  
-  // Nó com funções configuradas (método, set, get)
-  if (functions.length > 0) {
-    return generateFunctionChain(functions, node, edges, nodes, depth)
-  }
-  
-  // Fallback legado: label "Componente.Metodo"
-  if (node.label.includes('.')) {
-    const compName = node.metadata?.componentName || node.label.split('.')[0]
-    const methodName = node.label.split('.')[1]
+  // ===== EVENTO DE COMPONENTE =====
+  if (node.type === 'event' || eventFunc || node.label.startsWith('Quando')) {
+    block.type = 'component_event'
+    const compName = node.metadata?.componentName || 'Screen1'
     const compType = node.metadata?.componentType || 'Form'
-    if (methodName && methodName !== 'undefined') {
-      blockXml += `${pad}<block type="component_method" id="${generateId()}">\n`
-      blockXml += `${pad2}<mutation component_type="${compType}" method_name="${methodName}" is_generic="false" instance_name="${compName}"></mutation>\n`
-      blockXml += `${pad2}<field name="COMPONENT_SELECTOR">${compName}</field>\n`
-      blockXml += processNextNode(node, edges, nodes, depth)
-      blockXml += `${pad}</block>\n`
-      return blockXml
+    const eventName = node.metadata?.eventName || eventFunc?.name || 'Initialize'
+    
+    block.mutation = {
+      component_type: compType,
+      is_generic: 'false',
+      instance_name: compName,
+      event_name: eventName
     }
+    block.fields.COMPONENT_SELECTOR = compName
+
+    // Processar filhos (statement DO)
+    const childEdges = edges.filter(e => e.source === node.id && e.label !== 'Não')
+    if (childEdges.length > 0) {
+      const firstChildId = childEdges[0].target
+      const childNode = allNodes.find(n => n.id === firstChildId)
+      if (childNode && !processedNodes.has(childNode.id)) {
+        const childBlock = convertNodeToBlock(childNode, allNodes, edges, processedNodes)
+        if (childBlock) {
+          delete childBlock.x
+          delete childBlock.y
+          block.statements.DO = childBlock
+        }
+      }
+    }
+    
+    return block
   }
-  
-  // Bloco genérico de texto
-  blockXml += `${pad}<block type="text_print" id="${generateId()}">\n`
-  blockXml += `${pad2}<value name="TEXT"><block type="text" id="${generateId()}"><field name="TEXT">${node.label}</field></block></value>\n`
-  blockXml += processNextNode(node, edges, nodes, depth)
-  blockXml += `${pad}</block>\n`
-  return blockXml
+
+  // ===== PROCEDIMENTO =====
+  if (node.label.startsWith('Procedimento:') || node.label.startsWith('Função:')) {
+    const isFunction = node.label.startsWith('Função:')
+    block.type = isFunction ? 'procedures_defreturn' : 'procedures_defnoreturn'
+    const name = node.label.replace(/^(Procedimento|Função): /, '')
+    block.fields.NAME = name
+
+    const childEdges = edges.filter(e => e.source === node.id)
+    if (childEdges.length > 0) {
+      const firstChildId = childEdges[0].target
+      const childNode = allNodes.find(n => n.id === firstChildId)
+      if (childNode && !processedNodes.has(childNode.id)) {
+        const childBlock = convertNodeToBlock(childNode, allNodes, edges, processedNodes)
+        if (childBlock) {
+          delete childBlock.x
+          delete childBlock.y
+          block.statements.STACK = childBlock
+        }
+      }
+    }
+    
+    return block
+  }
+
+  // ===== VARIÁVEL GLOBAL =====
+  if (node.label.startsWith('Variável Global:')) {
+    block.type = 'global_declaration'
+    const name = node.label.replace('Variável Global: ', '')
+    block.fields.NAME = name
+    
+    const value = setPropFunc?.value || functions[0]?.value || '0'
+    block.values.VALUE = createValueBlock(value)
+    
+    return block
+  }
+
+  // ===== MÉTODO DE COMPONENTE =====
+  if (methodFunc || node.metadata?.methodName) {
+    block.type = 'component_method'
+    const compName = node.metadata?.componentName || 'Screen1'
+    const compType = node.metadata?.componentType || 'Form'
+    const methodName = node.metadata?.methodName || methodFunc?.name || 'Method'
+    
+    block.mutation = {
+      component_type: compType,
+      method_name: methodName,
+      is_generic: 'false',
+      instance_name: compName
+    }
+    block.fields.COMPONENT_SELECTOR = compName
+
+    // Adicionar argumentos do método se houver
+    if (methodFunc?.value) {
+      const args = String(methodFunc.value).split(',').map(s => s.trim()).filter(Boolean)
+      args.forEach((arg, idx) => {
+        block.values[`ARG${idx}`] = createValueBlock(arg)
+      })
+    }
+
+    addNextBlock(block, node, allNodes, edges, processedNodes)
+    return block
+  }
+
+  // ===== SET PROPERTY =====
+  if (setPropFunc || (node.metadata?.propertyName && node.label.startsWith('Definir'))) {
+    block.type = 'component_set'
+    const compName = node.metadata?.componentName || 'Screen1'
+    const compType = node.metadata?.componentType || 'Form'
+    const propName = node.metadata?.propertyName || setPropFunc?.name || 'Property'
+    
+    block.mutation = {
+      component_type: compType,
+      set_or_get: 'set',
+      property_name: propName,
+      is_generic: 'false',
+      instance_name: compName
+    }
+    block.fields.COMPONENT_SELECTOR = compName
+    block.values.VALUE = createValueBlock(setPropFunc?.value || '')
+
+    addNextBlock(block, node, allNodes, edges, processedNodes)
+    return block
+  }
+
+  // ===== GET PROPERTY =====
+  if (getPropFunc || (node.metadata?.propertyName && node.label.startsWith('Obter'))) {
+    block.type = 'component_get'
+    const compName = node.metadata?.componentName || 'Screen1'
+    const compType = node.metadata?.componentType || 'Form'
+    const propName = node.metadata?.propertyName || getPropFunc?.name || 'Property'
+    
+    block.mutation = {
+      component_type: compType,
+      set_or_get: 'get',
+      property_name: propName,
+      is_generic: 'false',
+      instance_name: compName
+    }
+    block.fields.COMPONENT_SELECTOR = compName
+
+    return block
+  }
+
+  // ===== DEFINIR VARIÁVEL =====
+  if (node.label.startsWith('Definir ') && node.type === 'logic') {
+    block.type = 'lexical_variable_set'
+    const varName = node.label.replace('Definir ', '')
+    block.fields.VAR = `global ${varName}`
+    block.values.VALUE = createValueBlock(setPropFunc?.value || '0')
+
+    addNextBlock(block, node, allNodes, edges, processedNodes)
+    return block
+  }
+
+  // ===== OBTER VARIÁVEL =====
+  if (node.label.startsWith('Obter ') && node.type === 'logic') {
+    block.type = 'lexical_variable_get'
+    const varName = node.label.replace('Obter ', '')
+    block.fields.VAR = `global ${varName}`
+    return block
+  }
+
+  // ===== ABRIR TELA =====
+  if (node.label.startsWith('Abrir Tela') || node.metadata?.targetScreen) {
+    block.type = 'controls_openAnotherScreen'
+    const screenName = node.metadata?.targetScreen || node.label.replace('Abrir Tela: ', '') || 'Screen1'
+    
+    block.values.SCREEN = {
+      id: generateId(),
+      type: 'text',
+      fields: { TEXT: screenName },
+      values: {},
+      statements: {}
+    }
+
+    addNextBlock(block, node, allNodes, edges, processedNodes)
+    return block
+  }
+
+  // ===== FECHAR TELA =====
+  if (node.label === 'Fechar Tela') {
+    block.type = 'controls_closeScreen'
+    addNextBlock(block, node, allNodes, edges, processedNodes)
+    return block
+  }
+
+  // ===== DECISÃO (IF) =====
+  if (node.type === 'decision') {
+    block.type = 'controls_if'
+    
+    // Condição padrão
+    block.values.IF0 = {
+      id: generateId(),
+      type: 'logic_boolean',
+      fields: { BOOL: 'TRUE' },
+      values: {},
+      statements: {}
+    }
+
+    // Processar branches
+    const childEdges = edges.filter(e => e.source === node.id)
+    const trueEdge = childEdges.find(e => !e.label || e.label === 'Sim' || e.label === 'Verdadeiro')
+    const falseEdge = childEdges.find(e => e.label === 'Não' || e.label === 'Falso')
+
+    if (trueEdge) {
+      const trueNode = allNodes.find(n => n.id === trueEdge.target)
+      if (trueNode && !processedNodes.has(trueNode.id)) {
+        const trueBlock = convertNodeToBlock(trueNode, allNodes, edges, processedNodes)
+        if (trueBlock) {
+          delete trueBlock.x
+          delete trueBlock.y
+          block.statements.DO0 = trueBlock
+        }
+      }
+    }
+
+    if (falseEdge) {
+      block.mutation = { ...block.mutation, else: '1' }
+      const falseNode = allNodes.find(n => n.id === falseEdge.target)
+      if (falseNode && !processedNodes.has(falseNode.id)) {
+        const falseBlock = convertNodeToBlock(falseNode, allNodes, edges, processedNodes)
+        if (falseBlock) {
+          delete falseBlock.x
+          delete falseBlock.y
+          block.statements.ELSE = falseBlock
+        }
+      }
+    }
+
+    return block
+  }
+
+  // ===== BLOCO COM TIPO BKY EXPLÍCITO =====
+  if (node.metadata?.bkyType) {
+    block.type = node.metadata.bkyType
+    
+    // Tratar tipos específicos
+    if (block.type === 'text') {
+      block.fields.TEXT = String(setPropFunc?.value || '')
+    } else if (block.type === 'math_number') {
+      block.fields.NUM = String(setPropFunc?.value || '0')
+    } else if (block.type === 'logic_boolean') {
+      block.fields.BOOL = String(setPropFunc?.value || 'TRUE').toUpperCase()
+    }
+
+    addNextBlock(block, node, allNodes, edges, processedNodes)
+    return block
+  }
+
+  // ===== BLOCO GENÉRICO (FALLBACK) =====
+  block.type = 'text_print'
+  block.values.TEXT = {
+    id: generateId(),
+    type: 'text',
+    fields: { TEXT: node.label },
+    values: {},
+    statements: {}
+  }
+
+  addNextBlock(block, node, allNodes, edges, processedNodes)
+  return block
 }
 
-function processNextNode(node: any, edges: any[], nodes: any[], depth: number): string {
+/**
+ * Adiciona o próximo bloco na cadeia (next)
+ */
+function addNextBlock(
+  block: BkyBlock, 
+  node: FlowNode, 
+  allNodes: FlowNode[], 
+  edges: FlowEdge[],
+  processedNodes: Set<string>
+) {
   const nextEdge = edges.find(e => e.source === node.id && !e.label)
   if (nextEdge) {
-    const pad = indent(depth + 2)
-    let xml = `${pad}<next>\n`
-    xml += processNodeToBky(nextEdge.target, nodes, edges, depth + 2)
-    xml += `${pad}</next>\n`
-    return xml
+    const nextNode = allNodes.find(n => n.id === nextEdge.target)
+    if (nextNode && !processedNodes.has(nextNode.id)) {
+      const nextBlock = convertNodeToBlock(nextNode, allNodes, edges, processedNodes)
+      if (nextBlock) {
+        delete nextBlock.x
+        delete nextBlock.y
+        block.next = nextBlock
+      }
+    }
   }
-  return ''
 }
 
-function generateFunctionChain(functions: any[], node: any, edges: any[], nodes: any[], depth: number): string {
-  const compName = node.metadata?.componentName || 'Screen1'
-  const compType = node.metadata?.componentType || 'Form'
-  const pad = indent(depth)
-  const pad2 = indent(depth + 2)
-
-  // Construir blocos encadeados com <next>
-  let result = ''
+/**
+ * Cria um bloco de valor baseado no tipo inferido
+ */
+function createValueBlock(value: any): BkyBlock {
+  const id = generateId()
+  const strValue = String(value)
   
-  for (let i = 0; i < functions.length; i++) {
-    const func = functions[i]
-    if (!func.name || func.name === 'undefined') continue
-    
-    if (func.type === 'method') {
-      result += `${pad}<block type="component_method" id="${generateId()}">\n`
-      result += `${pad2}<mutation component_type="${compType}" method_name="${func.name}" is_generic="false" instance_name="${compName}"></mutation>\n`
-      result += `${pad2}<field name="COMPONENT_SELECTOR">${compName}</field>\n`
-      
-      // Argumentos do método
-      if (func.value && typeof func.value === 'string' && func.value.trim()) {
-        const params = func.value.split(',').map((s: string) => s.trim())
-        params.forEach((param: string, pIdx: number) => {
-          result += `${pad2}<value name="ARG${pIdx}">\n`
-          result += indent(depth + 4) + getValueBlockFromString(param) + '\n'
-          result += `${pad2}</value>\n`
-        })
-      }
-      
-      // Encadear próximo
-      if (i < functions.length - 1) {
-        result += `${pad2}<next>\n`
-        result += generateFunctionChain(functions.slice(i + 1), node, edges, nodes, depth + 2)
-        result += `${pad2}</next>\n`
-      } else {
-        result += processNextNode(node, edges, nodes, depth)
-      }
-      result += `${pad}</block>\n`
-      break // O encadeamento é recursivo
-      
-    } else if (func.type === 'property_set') {
-      result += `${pad}<block type="component_set" id="${generateId()}">\n`
-      result += `${pad2}<mutation component_type="${compType}" set_or_get="set" property_name="${func.name}" is_generic="false" instance_name="${compName}"></mutation>\n`
-      result += `${pad2}<field name="COMPONENT_SELECTOR">${compName}</field>\n`
-      result += `${pad2}<value name="VALUE">\n`
-      result += indent(depth + 4) + getValueBlock(func.value, func.inputType) + '\n'
-      result += `${pad2}</value>\n`
-      
-      if (i < functions.length - 1) {
-        result += `${pad2}<next>\n`
-        result += generateFunctionChain(functions.slice(i + 1), node, edges, nodes, depth + 2)
-        result += `${pad2}</next>\n`
-      } else {
-        result += processNextNode(node, edges, nodes, depth)
-      }
-      result += `${pad}</block>\n`
-      break
+  // Booleano
+  if (strValue === 'true' || strValue === 'false' || strValue === 'TRUE' || strValue === 'FALSE') {
+    return {
+      id,
+      type: 'logic_boolean',
+      fields: { BOOL: strValue.toUpperCase() },
+      values: {},
+      statements: {}
     }
   }
   
-  return result
-}
-
-function getValueBlock(value: any, inputType?: string): string {
-  const id = generateId()
-  if (inputType === 'number') {
-    return `<block type="math_number" id="${id}"><field name="NUM">${value || 0}</field></block>`
-  } else if (inputType === 'boolean') {
-    return `<block type="logic_boolean" id="${id}"><field name="BOOL">${String(!!value).toUpperCase()}</field></block>`
-  } else if (inputType === 'color') {
-    return `<block type="color_picker" id="${id}"><field name="COLOR">${value || '#ffffff'}</field></block>`
-  } else {
-    return `<block type="text" id="${id}"><field name="TEXT">${value || ''}</field></block>`
+  // Número
+  if (!isNaN(Number(strValue)) && strValue.trim() !== '') {
+    return {
+      id,
+      type: 'math_number',
+      fields: { NUM: strValue },
+      values: {},
+      statements: {}
+    }
+  }
+  
+  // Cor
+  if (strValue.startsWith('#') && (strValue.length === 7 || strValue.length === 9)) {
+    return {
+      id,
+      type: 'color_picker',
+      fields: { COLOR: strValue },
+      values: {},
+      statements: {}
+    }
+  }
+  
+  // Texto (padrão)
+  return {
+    id,
+    type: 'text',
+    fields: { TEXT: strValue.replace(/^["']|["']$/g, '') },
+    values: {},
+    statements: {}
   }
 }
 
-function getValueBlockFromString(param: string): string {
-  const id = generateId()
-  if (param === 'true' || param === 'false') {
-    return `<block type="logic_boolean" id="${id}"><field name="BOOL">${param.toUpperCase()}</field></block>`
-  }
-  if (!isNaN(Number(param)) && param.trim() !== '') {
-    return `<block type="math_number" id="${id}"><field name="NUM">${param}</field></block>`
-  }
-  const strVal = param.replace(/^["']|["']$/g, '')
-  return `<block type="text" id="${id}"><field name="TEXT">${strVal}</field></block>`
-}
+// Re-exportar tipos e utilidades para compatibilidade
+export { generateId }
+export type { BkyBlock, BkyDocument, FlowNode, FlowEdge, FlowDocument }

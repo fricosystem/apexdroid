@@ -12,6 +12,7 @@ import {
 import { Button } from "@/components/ui/button"
 import { useIDEStore } from "@/lib/ide-store"
 import { useProjectManager } from "@/lib/hooks/use-project-manager"
+import { bkySyncService } from "@/lib/bky-sync-service"
 import { toast } from "sonner"
 import { cn } from "@/lib/utils"
 import {
@@ -48,7 +49,11 @@ export function CodeEditor({ className }: CodeEditorProps) {
     ghToken, 
     selectedRepo,
     aiSettings,
-    setCurrentProject
+    setCurrentProject,
+    currentBkyContent,
+    setBkyContent,
+    bkySyncSource,
+    bkySyncTimestamp
   } = useIDEStore()
   
   const { saveCurrentScreen } = useProjectManager()
@@ -137,8 +142,6 @@ export function CodeEditor({ className }: CodeEditorProps) {
     }
   }, [])
 
-  const { currentBkyContent, setCurrentBkyContent } = useIDEStore()
-
   // Gerar o código SCM e BKY do projeto atual
   useEffect(() => {
     if (currentProject) {
@@ -176,6 +179,33 @@ export function CodeEditor({ className }: CodeEditorProps) {
       setIsValidJson(true)
     }
   }, [currentProject, currentBkyContent, activeTab])
+
+  // Listener para sincronização vinda de outras abas (Blocks ou Flowchart)
+  useEffect(() => {
+    // Se estamos na aba backend e a sincronização veio de outra fonte
+    if (activeTab === "backend" && bkySyncSource && bkySyncSource !== 'code' && currentBkyContent) {
+      console.log(`[CodeEditor] Atualizando código BKY - origem: ${bkySyncSource}`)
+      
+      // Formatar o BKY recebido
+      let formattedBky = currentBkyContent
+      if (currentBkyContent.trim().startsWith("<")) {
+        let formatted = ""
+        let indent = ""
+        const tab = "  "
+        currentBkyContent.replace(/>\s*</g, "><").split(/>(?=<)/).forEach((node) => {
+          if (node.match(/^\/\w/)) indent = indent.substring(tab.length)
+          formatted += indent + node + ">\n"
+          if (node.match(/^<?\w[^>]*[^\/]$/)) indent += tab
+        })
+        formattedBky = formatted.trim()
+      }
+      
+      setBkyCode(formattedBky)
+      setCode(formattedBky)
+      setOriginalCode(formattedBky)
+      setHasChanges(false)
+    }
+  }, [bkySyncTimestamp, bkySyncSource, activeTab, currentBkyContent])
 
   const handleEditorDidMount: OnMount = (editor, monaco) => {
     editorRef.current = editor
@@ -290,8 +320,23 @@ export function CodeEditor({ className }: CodeEditorProps) {
         }
         setCurrentProject(parsedJson)
       } else {
-        // Salvar Backend (BKY)
-        setCurrentBkyContent(code)
+        // Salvar Backend (BKY) usando o novo sistema de sincronização
+        // Validar se é XML válido
+        const validation = bkySyncService.validateBkyXml(code)
+        if (!validation.valid) {
+          toast.error("XML BKY invalido!", {
+            description: validation.errors[0] || "Formato invalido"
+          })
+          setIsSaving(false)
+          return
+        }
+        
+        setBkyContent(code, 'code')
+        
+        // Notificar o serviço centralizado para sincronizar com outras abas
+        if (currentScreenName) {
+          bkySyncService.updateFromBkyXml(currentScreenName, code, 'code')
+        }
       }
       
       // Forcar sync com GitHub
@@ -306,7 +351,7 @@ export function CodeEditor({ className }: CodeEditorProps) {
     } finally {
       setIsSaving(false)
     }
-  }, [ghToken, selectedRepo, code, hasChanges, currentScreenName, screens, setCurrentProject, setCurrentBkyContent, isValidJson, jsonErrors, activeTab, saveCurrentScreen])
+  }, [ghToken, selectedRepo, code, hasChanges, currentScreenName, screens, setCurrentProject, setBkyContent, isValidJson, jsonErrors, activeTab, saveCurrentScreen])
 
   const handleReset = useCallback(() => {
     setCode(originalCode)

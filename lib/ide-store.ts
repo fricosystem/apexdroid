@@ -23,6 +23,9 @@ import type {
   HistorySnapshot
 } from "./ide-types"
 
+// Tipo para rastrear a origem da sincronização BKY
+export type BkySyncSource = 'blocks' | 'code' | 'flowchart' | 'file' | null
+
 interface IDEState {
   // GitHub
   ghToken: string | null
@@ -55,6 +58,11 @@ interface IDEState {
   setCurrentBkyContent: (content: string | null) => void
   currentFlowchartContent: string | null
   setCurrentFlowchartContent: (content: string | null) => void
+
+  // BKY Sync State
+  bkySyncSource: BkySyncSource
+  bkySyncTimestamp: number
+  setBkyContent: (content: string | null, source: BkySyncSource) => void
 
   // Selection
   selectedComponent: KodularComponent | null
@@ -213,6 +221,30 @@ export const useIDEStore = create<IDEState>()(
           return { currentFlowchartContent: content, screens: updatedScreens }
         }
         return { currentFlowchartContent: content }
+      }),
+
+      // BKY Sync State
+      bkySyncSource: null,
+      bkySyncTimestamp: 0,
+      setBkyContent: (content, source) => set((state) => {
+        const { currentScreenName, screens } = state
+        const timestamp = Date.now()
+        
+        // Atualizar currentBkyContent e screens simultaneamente
+        const updates: Partial<IDEState> = {
+          currentBkyContent: content,
+          bkySyncSource: source,
+          bkySyncTimestamp: timestamp
+        }
+        
+        if (currentScreenName && screens[currentScreenName]) {
+          updates.screens = {
+            ...screens,
+            [currentScreenName]: { ...screens[currentScreenName], bkyContent: content }
+          }
+        }
+        
+        return updates
       }),
 
       // Selection

@@ -17,6 +17,7 @@ import { Input } from "@/components/ui/input"
 import { toast } from "sonner"
 import { convertBkyToFlow } from "@/lib/bky-to-flow"
 import { convertFlowToBky } from "@/lib/flow-to-bky"
+import { bkySyncService } from "@/lib/bky-sync-service"
 import { updateFileContent, fetchFileContent } from "@/lib/github-service"
 import { 
   getBlocksCatalogForComponent, 
@@ -70,7 +71,7 @@ export function FlowchartEditor() {
     currentFlowchartContent, 
     setCurrentFlowchartContent,
     currentBkyContent,
-    setCurrentBkyContent,
+    setBkyContent,
     screens,
     currentProject,
     ghToken,
@@ -78,7 +79,9 @@ export function FlowchartEditor() {
     setSelectedComponent,
     findComponent,
     updateComponent,
-    aiSettings
+    aiSettings,
+    bkySyncSource,
+    bkySyncTimestamp
   } = useIDEStore()
 
   const [nodes, setNodes] = useState<Node[]>([])
@@ -167,6 +170,30 @@ export function FlowchartEditor() {
     setIsLoading(false)
   }, [currentBkyContent, currentScreenName, screens])
 
+  // Listener para sincronização vinda de outras abas (Blocks ou Code Editor)
+  useEffect(() => {
+    // Se a origem da sincronização não foi o fluxograma, recarregar os nós
+    if (bkySyncSource && bkySyncSource !== 'flowchart' && currentBkyContent && currentScreenName) {
+      console.log(`[FlowchartEditor] Recarregando fluxo - origem: ${bkySyncSource}`)
+      
+      if (currentBkyContent.trim().startsWith('<xml')) {
+        const { nodes: convertedNodes, edges: convertedEdges } = convertBkyToFlow(currentBkyContent)
+        
+        if (convertedNodes.length > 0) {
+          setNodes(convertedNodes)
+          setEdges(convertedEdges)
+          lastBkyRef.current = currentBkyContent
+          
+          // Atualizar localStorage
+          if (selectedRepo) {
+            const content = JSON.stringify({ nodes: convertedNodes, edges: convertedEdges })
+            localStorage.setItem(`flow_${selectedRepo.name}_${currentScreenName}`, content)
+          }
+        }
+      }
+    }
+  }, [bkySyncTimestamp, bkySyncSource, currentBkyContent, currentScreenName, selectedRepo])
+
   // Gerar codigo JavaScript a partir do fluxo
   const generateJS = useCallback((nodes: Node[], edges: Edge[]) => {
     let code = "/** Codigo Gerado via Fluxograma **/\n\n"
@@ -224,8 +251,14 @@ export function FlowchartEditor() {
       if (newNodes.length > 0) {
         const generatedBky = convertFlowToBky(newNodes, newEdges)
         if (generatedBky !== currentBkyContent) {
-          setCurrentBkyContent(generatedBky)
+          // Usar o novo sistema de sincronização
+          setBkyContent(generatedBky, 'flowchart')
           lastBkyRef.current = generatedBky
+          
+          // Notificar o serviço centralizado
+          if (currentScreenName) {
+            bkySyncService.updateFromBkyXml(currentScreenName, generatedBky, 'flowchart')
+          }
         }
       }
 
@@ -243,7 +276,7 @@ export function FlowchartEditor() {
     } else {
       saveTimeout.current = setTimeout(runSave, 1500)
     }
-  }, [setCurrentFlowchartContent, generateJS, currentScreenName, currentBkyContent, setCurrentBkyContent, selectedRepo])
+  }, [setCurrentFlowchartContent, generateJS, currentScreenName, currentBkyContent, setBkyContent, selectedRepo])
 
   // Sincronizar todos os componentes do projeto como nos
   const syncProjectComponents = useCallback(() => {
@@ -319,8 +352,11 @@ export function FlowchartEditor() {
         `Update blocks for screen ${currentScreenName} via APEX Flowchart`
       )
 
-      // 4. Atualizar o store local
-      setCurrentBkyContent(bkyXml)
+      // 4. Atualizar o store local usando o novo sistema de sincronização
+      setBkyContent(bkyXml, 'flowchart')
+      
+      // Notificar o serviço centralizado
+      bkySyncService.updateFromBkyXml(currentScreenName, bkyXml, 'flowchart')
       
       setLastSyncTime(new Date())
       setSyncStatus("success")

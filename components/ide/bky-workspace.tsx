@@ -9,18 +9,21 @@ import 'blockly/blocks'
 import { registerKodularBlocks, generateDynamicToolbox } from "@/lib/blocks-utils"
 import { generateCodeFromWorkspace, registerCodeGenerators } from "@/lib/blocks-codegen"
 import { convertScmToBlocks } from "@/lib/scm-to-blocks"
+import { bkySyncService } from "@/lib/bky-sync-service"
 import { toast } from "sonner"
 
 export function BkyWorkspace() {
   const { 
     currentBkyContent, 
     currentProject, 
-    setCurrentBkyContent,
+    setBkyContent,
     currentScreenName,
     screens,
     ghToken,
     selectedRepo,
-    setSyncStatus
+    setSyncStatus,
+    bkySyncSource,
+    bkySyncTimestamp
   } = useIDEStore()
   
   const blocklyDiv = useRef<HTMLDivElement>(null)
@@ -157,11 +160,17 @@ export function BkyWorkspace() {
     const xmlDom = Blockly.Xml.workspaceToDom(ws)
     const blocksXml = Blockly.Xml.domToText(xmlDom)
     
-    // Atualizar o bkyContent da screen atual
-    setCurrentBkyContent(blocksXml)
+    // Atualizar o bkyContent usando o novo sistema de sincronizacao
+    setBkyContent(blocksXml, 'blocks')
+    
+    // Notificar o serviço centralizado
+    const { currentScreenName } = useIDEStore.getState()
+    if (currentScreenName) {
+      bkySyncService.updateFromBkyXml(currentScreenName, blocksXml, 'blocks')
+    }
     
     // Atualizar diretamente no objeto screens para persistencia na sessao
-    const { screens, currentScreenName } = useIDEStore.getState()
+    const { screens } = useIDEStore.getState()
     if (currentScreenName && screens[currentScreenName]) {
       screens[currentScreenName].bkyContent = blocksXml
       
@@ -182,7 +191,7 @@ export function BkyWorkspace() {
     setSyncStatus("synced") // O auto-sync da Sidebar cuidara do push real
     setLastSaved(new Date())
     setIsSaving(false)
-  }, [setCurrentBkyContent, setSyncStatus])
+  }, [setBkyContent, setSyncStatus])
 
   // Inicializacao Unica do Workspace
   useEffect(() => {
@@ -355,9 +364,9 @@ export function BkyWorkspace() {
                 const generated = convertScmToBlocks(screenData)
                 if (generated.blocks.blocks && generated.blocks.blocks.length > 0) {
                   Blockly.serialization.workspaces.load(generated, workspace)
-                  // Salvar no store para persistencia
+                  // Salvar no store para persistencia usando o novo sistema
                   const state = Blockly.serialization.workspaces.save(workspace)
-                  setCurrentBkyContent(JSON.stringify(state))
+                  setBkyContent(JSON.stringify(state), 'blocks')
                 }
               } catch (e) {
                 console.error("Erro ao gerar blocos do SCM:", e)
@@ -378,6 +387,32 @@ export function BkyWorkspace() {
     }
   }, [currentScreenName, workspace, loadBlocksContent, screens])
 
+  // Listener para sincronização vinda de outras abas (Code Editor ou Flowchart)
+  useEffect(() => {
+    if (!workspace || !currentScreenName) return
+    
+    // Se a origem da sincronização não foi o editor de blocos, recarregar
+    if (bkySyncSource && bkySyncSource !== 'blocks' && currentBkyContent) {
+      console.log(`[BkyWorkspace] Recarregando blocos - origem: ${bkySyncSource}`)
+      
+      try {
+        const gesture = workspace.getGesture()
+        if (gesture) gesture.cancel()
+        
+        Blockly.Events.disable()
+        workspace.clear()
+        loadBlocksContent(currentBkyContent, workspace)
+        
+        setTimeout(() => {
+          Blockly.Events.enable()
+        }, 100)
+      } catch (err) {
+        console.error("[BkyWorkspace] Erro ao recarregar blocos:", err)
+        Blockly.Events.enable()
+      }
+    }
+  }, [bkySyncTimestamp, bkySyncSource, workspace, currentScreenName, currentBkyContent, loadBlocksContent])
+
   // Salvar manualmente
   const handleManualSave = useCallback(() => {
     if (workspace) {
@@ -393,7 +428,10 @@ export function BkyWorkspace() {
     // Primeiro salvar
     const xmlDom = Blockly.Xml.workspaceToDom(workspace)
     const blocksXml = Blockly.Xml.domToText(xmlDom)
-    setCurrentBkyContent(blocksXml)
+    setBkyContent(blocksXml, 'blocks')
+    
+    // Notificar o serviço centralizado
+    bkySyncService.updateFromBkyXml(currentScreenName, blocksXml, 'blocks')
     
     const { screens } = useIDEStore.getState()
     if (screens[currentScreenName]) {
@@ -402,7 +440,7 @@ export function BkyWorkspace() {
     
     // Depois sincronizar
     await syncToGitHub(currentScreenName, blocksXml)
-  }, [workspace, currentScreenName, setCurrentBkyContent, syncToGitHub])
+  }, [workspace, currentScreenName, setBkyContent, syncToGitHub])
 
   return (
     <div className="absolute inset-0 flex flex-col bg-[#0a0a0a] overflow-hidden">
