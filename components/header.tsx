@@ -24,9 +24,7 @@ export function Header({ onLoginClick, onRegisterClick }: HeaderProps) {
             href="/" 
             className="flex items-center gap-2.5 font-bold text-lg tracking-tight text-foreground hover:text-primary transition-colors"
           >
-            <div className="w-8 h-8 rounded-lg flex items-center justify-center overflow-hidden">
-              <Image src="/APEX_LOGO.png" alt="APEX DROID" width={32} height={32} className="object-contain" />
-            </div>
+            <Image src="/APEX_LOGO.png" alt="APEX DROID" width={32} height={32} className="object-contain" />
             <span className="hidden sm:inline">APEX DROID</span>
           </Link>
           
