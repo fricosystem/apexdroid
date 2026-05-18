@@ -29,8 +29,8 @@ import { AssetsModal } from "@/components/ide/assets-modal"
 import { CodeEditor } from "@/components/ide/code-editor"
 import { useIDEStore } from "@/lib/ide-store"
 import { useProjectManager } from "@/lib/hooks/use-project-manager"
-import { fetchUserRepos } from "@/lib/github-service"
-import type { GitHubRepo } from "@/lib/ide-types"
+import { fetchUserRepos, fetchFileContent } from "@/lib/github-service"
+import type { GitHubRepo, ScreenFile } from "@/lib/ide-types"
 
 export default function IDEPage() {
   const router = useRouter()
@@ -56,10 +56,149 @@ export default function IDEPage() {
     setGhRepos,
     isCodeEditorOpen,
     setIsCodeEditorOpen,
-    appMode
+    appMode,
+    setActiveTab,
+    setCurrentProject,
+    setCurrentScreenName,
+    setCurrentFile,
+    setShowWelcome,
+    setCurrentBkyContent,
+    setCurrentFlowchartContent,
+    saveSnapshot,
+    setShowProperties,
+    setSelectedComponent,
+    screens: storeScreens
   } = useIDEStore()
 
   const { selectProject } = useProjectManager()
+
+  // Helper function to extract balanced JSON from SCM content
+  const extractBalancedJSON = (content: string, startIndex: number): string | null => {
+    let braceCount = 0
+    let inString = false
+    let escapeNext = false
+    let jsonEnd = startIndex
+    
+    for (let i = startIndex; i < content.length; i++) {
+      const char = content[i]
+      
+      if (escapeNext) {
+        escapeNext = false
+        continue
+      }
+      
+      if (char === '\\' && inString) {
+        escapeNext = true
+        continue
+      }
+      
+      if (char === '"' && !escapeNext) {
+        inString = !inString
+        continue
+      }
+      
+      if (!inString) {
+        if (char === '{') braceCount++
+        else if (char === '}') {
+          braceCount--
+          if (braceCount === 0) {
+            jsonEnd = i + 1
+            break
+          }
+        }
+      }
+    }
+    
+    if (braceCount !== 0) return null
+    return content.substring(startIndex, jsonEnd)
+  }
+
+  // Parse SCM file content
+  const parseSCMContent = (content: string): { json: string; prefix: string } | null => {
+    const jsonStart = content.indexOf("{")
+    if (jsonStart === -1) return null
+    
+    const prefix = content.substring(0, jsonStart)
+    const json = extractBalancedJSON(content, jsonStart)
+    
+    if (!json) return null
+    return { json, prefix }
+  }
+
+  // Load a screen from GitHub
+  const loadScreen = useCallback(async (screen: ScreenFile, repo: GitHubRepo, ghToken: string) => {
+    const [owner] = repo.full_name.split("/")
+    
+    try {
+      const { content: scmContent, sha } = await fetchFileContent(ghToken, owner, repo.name, screen.scmPath)
+      const parsed = parseSCMContent(scmContent)
+      
+      if (!parsed) {
+        console.error("[v0] Could not parse SCM format")
+        return
+      }
+      
+      const projectData = JSON.parse(parsed.json)
+      
+      // Update store with screen data
+      const currentScreens = useIDEStore.getState().screens
+      useIDEStore.setState({
+        currentProject: projectData,
+        currentScreenName: screen.name,
+        screens: {
+          ...currentScreens,
+          [screen.name]: {
+            name: screen.name,
+            data: projectData,
+            scmPath: screen.scmPath,
+            bkyPath: screen.bkyPath,
+            bkyContent: null,
+            scmPrefix: parsed.prefix
+          }
+        }
+      })
+
+      setCurrentFile({
+        repo: repo.full_name,
+        path: screen.scmPath,
+        sha,
+        branch: repo.default_branch,
+        originalContent: scmContent,
+        content: scmContent
+      })
+      
+      setActiveTab("componentes")
+      setShowProperties(true)
+      setSelectedComponent(projectData.Properties)
+      setShowWelcome(false)
+      
+      // Load .bky file
+      if (screen.bkyPath) {
+        try {
+          const { content: bkyContent } = await fetchFileContent(ghToken, owner, repo.name, screen.bkyPath)
+          setCurrentBkyContent(bkyContent)
+        } catch {
+          setCurrentBkyContent(null)
+        }
+      } else {
+        setCurrentBkyContent(null)
+      }
+      
+      // Try to load .flow file
+      setCurrentFlowchartContent(null)
+      try {
+        const flowPath = screen.scmPath.replace(".scm", ".flow")
+        const { content: flowContent } = await fetchFileContent(ghToken, owner, repo.name, flowPath)
+        setCurrentFlowchartContent(flowContent)
+      } catch {
+        // No .flow file, that's ok
+      }
+      
+      saveSnapshot()
+    } catch (error) {
+      console.error("[v0] Error loading screen:", error)
+    }
+  }, [setCurrentFile, setActiveTab, setShowProperties, setSelectedComponent, setShowWelcome, setCurrentBkyContent, setCurrentFlowchartContent, saveSnapshot])
 
   // Carregar token e projeto do localStorage
   const loadProjectFromStorage = useCallback(async () => {
@@ -99,7 +238,13 @@ export default function IDEPage() {
         )
 
         if (fullRepo) {
-          await selectProject(fullRepo)
+          const result = await selectProject(fullRepo)
+          
+          // Carregar automaticamente a primeira tela se houver telas disponíveis
+          if (result && result.screens && result.screens.length > 0) {
+            const firstScreen = result.screens[0]
+            await loadScreen(firstScreen, fullRepo, savedToken)
+          }
         }
       }
     } catch (error) {
@@ -113,7 +258,7 @@ export default function IDEPage() {
     } finally {
       setLoadingProject(false)
     }
-  }, [router, setGhToken, setGhRepos, selectProject])
+  }, [router, setGhToken, setGhRepos, selectProject, loadScreen])
 
   const hasLoaded = useRef(false)
 

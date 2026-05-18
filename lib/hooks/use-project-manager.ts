@@ -82,11 +82,15 @@ export function useProjectManager() {
       setCurrentProject(null)
       setCurrentScreenName(null)
       setShowWelcome(false)
+      
+      // Retornar as telas para que o chamador possa abrir a primeira
+      return { screens, tree }
     } catch (error) {
       console.warn("Erro ao processar repositorio:", error instanceof Error ? error.message : error)
       setRepoTree([])
       setScreenFiles([])
       setProjectAssets([])
+      return { screens: [], tree: [] }
     } finally {
       setRepoTreeLoading(false)
     }
