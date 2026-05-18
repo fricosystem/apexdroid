@@ -52,7 +52,7 @@ function RealtimeInput({ value, onChange, placeholder, className, type = "text" 
 const propertyCategories = {
   basic: {
     name: "Básico",
-    properties: ["Text", "Hint", "Title", "Enabled", "Visible", "HTMLFormat", "Checked", "Selection"]
+    properties: ["Text", "Hint", "Title", "TitleVisible", "Enabled", "Visible", "HTMLFormat", "Checked", "Selection"]
   },
   appearance: {
     name: "Aparência",
@@ -187,9 +187,20 @@ export function PropertiesPanel({ onShowBlocks }: PropertiesPanelProps) {
     
     // Add any extra properties already in the object
     actualProps.forEach(p => allRelevantProps.add(p))
+    
+    // Para componentes do tipo Form (tela), sempre adicionar TitleVisible
+    if (componentType === "Form" || selectedComponent.$Type.includes("Form")) {
+      allRelevantProps.add("TitleVisible")
+    }
 
     allRelevantProps.forEach(key => {
-      const value = selectedComponent[key] ?? ""
+      // Para TitleVisible, se não existir, usar valor padrão "True"
+      let value = selectedComponent[key]
+      if (key === "TitleVisible" && (value === undefined || value === null || value === "")) {
+        value = "True"
+      }
+      value = value ?? ""
+      
       let found = false
       for (const [category, config] of Object.entries(propertyCategories)) {
         if (config.properties.includes(key)) {
@@ -303,7 +314,7 @@ export function PropertiesPanel({ onShowBlocks }: PropertiesPanelProps) {
     
     // Boolean / Checkbox properties
     if (typeof value === "boolean" || value === "True" || value === "False" || 
-        ["Enabled", "Visible", "FontBold", "FontItalic", "ShowFeedback", "HTMLFormat", "BorderShadow", "Scrollable"].includes(key)) {
+        ["Enabled", "Visible", "FontBold", "FontItalic", "ShowFeedback", "HTMLFormat", "BorderShadow", "Scrollable", "TitleVisible"].includes(key)) {
       const isTrue = stringValue === "True" || value === true
       return (
         <div 

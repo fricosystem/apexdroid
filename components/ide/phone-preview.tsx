@@ -930,7 +930,7 @@ export function PhonePreview() {
         </div>
         
         <div className="text-center px-10 relative z-10">
-          <Zap className="w-16 h-16 text-primary mx-auto mb-4" />
+          <img src="/APEX_LOGO.png" alt="APEX" className="w-20 h-20 mx-auto mb-4 object-contain" />
           <h1 className="text-3xl font-bold text-foreground mb-2">APEX DROID AI</h1>
           <p className="text-muted-foreground mb-10">
             O futuro do desenvolvimento Kodular, potencializado por IA.
